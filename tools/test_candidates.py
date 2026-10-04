@@ -6,6 +6,15 @@
 librime.so.1（Debian: librime1t64）及 /usr/share/rime-data（含
 default.yaml 与 luna_pinyin，用于反查依赖）。
 
+可用环境变量（便于对齐 Xime/Android 的真实环境做回归）：
+    RIME_LIBRIME_PATH      librime 动态库路径，默认 "librime.so.1"
+                           （指向 Xime 的 fork 可测真目标引擎，
+                             如 .../librime-t9/test_engine/build_engine/librime/lib/librime.so.1）
+    RIME_SHARED_DATA_DIR   共享数据目录，默认 "/usr/share/rime-data"
+                           （贴 Xime 时用 app/src/main/assets/rime）
+    RIME_LOG_LEVEL         librime 日志级别，默认 2（只看错误）；
+                           设 0 可看到 "building table/prism" 等阶段日志
+
 用法:
     tools/test_candidates.py <user_dir> <按键串1> [按键串2 ...]
 
@@ -17,6 +26,7 @@ user_dir 放 stroke.schema.yaml、stroke.dict.yaml 及如下 default.custom.yaml
 示例:
     tools/test_candidates.py /tmp/rime-user p ph phshzpn
 """
+import os
 import sys
 import ctypes
 from ctypes import (Structure, c_int, c_char_p, c_void_p, POINTER, byref,
@@ -116,18 +126,19 @@ class RimeApi(Structure):
 
 
 def init(user_dir):
-    lib = ctypes.CDLL("librime.so.1")
+    lib = ctypes.CDLL(os.environ.get("RIME_LIBRIME_PATH", "librime.so.1"))
     lib.rime_get_api.restype = POINTER(RimeApi)
     api = lib.rime_get_api().contents
     t = RimeTraits()
     t.data_size = sizeof(RimeTraits) - sizeof(c_int)
-    t.shared_data_dir = b"/usr/share/rime-data"
+    t.shared_data_dir = os.environ.get(
+        "RIME_SHARED_DATA_DIR", "/usr/share/rime-data").encode()
     t.user_data_dir = user_dir.encode()
     t.distribution_name = b"rime-stroke-test"
     t.distribution_code_name = b"rime-stroke-test"
     t.distribution_version = b"0.1"
     t.app_name = b"rime.rime-stroke-test"
-    t.min_log_level = 2
+    t.min_log_level = int(os.environ.get("RIME_LOG_LEVEL", "2"))
     t.log_dir = b""
     api.setup(byref(t))
     api.initialize(byref(t))
@@ -156,9 +167,13 @@ def run(api, keys, label=None):
     sid = api.create_session()
     api.select_schema(sid, b"stroke")
     typed = ""
+    final_only = os.environ.get("RIME_FINAL_ONLY") == "1"
     for ch in keys:
         api.process_key(sid, ord(ch), 0)
         typed += ch
+        if not final_only:
+            show(api, sid, typed)
+    if final_only:  # 只看打完后的候选，便于大词库下快速比对
         show(api, sid, typed)
     api.clear_composition(sid)
     api.destroy_session(sid)

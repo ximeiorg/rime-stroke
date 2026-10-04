@@ -4,18 +4,18 @@
 schema:
   schema_id: stroke
   name: "笔画"
-  version: "3.0"
+  version: "4.0"
   author:
     - 四季的風
     - 雪齋
     - Kunki Chou
     - 宋天
   description: |
-    五筆畫
-    h,s,p,n,z 代表橫、豎、撇、捺、折
-    支持詞組輸入：連續輸入整個詞組的全筆順即可匹配，
-    如「我們」= 我(phshzpn) + 們(psnsz)。
-    常用字按字頻排序，收錄 2.8 萬單字、23.6 萬詞組。
+    五筆畫：h,s,p,n,z 代表橫、豎、撇、捺、折。
+    每字只需打前幾筆 + 分詞鍵（空格，映射爲撇號 '），即可命中詞庫詞組；
+    非詞庫串（如「早上吃什麼」）由 script 引擎造句拼出。
+    例：「我」打 ph、「們」打 ps → ph'ps → 我們。
+    詞庫收錄 8133 常用單字、23.6 萬詞組，按字頻排序。
     詞庫數據來源見 sources/README.md。
   dependencies:
     - luna_pinyin
@@ -48,20 +48,60 @@ engine:
   translators:
     - punct_translator
     - reverse_lookup_translator
-    - table_translator
+    - script_translator
 
 speller:
+  # 撇号是词组分词键（空格键已绑定为发送撇号，见 key_binder）。
+  #
+  # 音节 = 每字全笔顺码；词库中一词的音节用空格分隔（encoder.cc 的
+  # RawCode::FromString 只按空格切分，写撇号会把整词变成一个音节）。
+  # 下面用 derive 为每个音节派生前缀拼写（2~14 笔），于是每字打前几笔
+  # + 分词键即可命中词组，粒度可逐字混搭；非词库串由 script 引擎造句。
+  #
+  # 为什么是 derive 而不是 abbrev（这一条是踩过的坑，别改回去）：
+  #   abbrev 产出的拼写类型是 kAbbreviation，derive 产出的是
+  #   kNormalSpelling。libRIME 的 syllabifier 在构图后会从最远顶点
+  #   往回剪枝（syllabifier.cc「remove disqualified syllables」）：
+  #   last_type = max(最远顶点类型, kFuzzySpelling)，凡是 type > last_type
+  #   的拼写整图删除。也就是说——只要输入末尾落在「精确拼写」上，
+  #   全图的简拼候选都会被删掉。词库里但凡有一个字的全码正好等于你
+  #   打的前缀（如 𠂉=ph、亻=ps、厂=hp、丿=p），你打这个前缀时最远顶点
+  #   就是精确拼写，我/们 的简拼被连带删除：症状是「打 ph'ps 只出
+  #   𠂉亻，出不来我们」。derive 的拼写与精确码同级（kNormalSpelling），
+  #   永远不会被剪掉，所以简拼稳定可用。
+  #
+  # 为什么从 2 笔起、不给 1 笔派生：
+  #   1 笔前缀对应的字数太多（全量字集每个笔画上千字），会把音节图
+  #   撑爆（实测每键 200ms+ 卡顿），而且 1 笔本来也无法定位一个字。
+  #   2 笔起，扇出降到几十个量级，按键即时。字集也已在生成词库时
+  #   收缩到「词组用到的字 ∪ 字频表收录」（见 tools/build_stroke_dict.py）。
   alphabet: "abcdefghijklmnopqrstuvwxyz"
   delimiter: " '"
+  algebra:
+    - "derive/^([hspnz]{2})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{3})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{4})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{5})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{6})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{7})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{8})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{9})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{10})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{11})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{12})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{13})[hspnz]+$/$1/"
+    - "derive/^([hspnz]{14})[hspnz]+$/$1/"
 
 menu:
   page_size: 9
 
 translator:
   dictionary: stroke
-  # 逐键前缀匹配：打前几笔即出候选，不必打满全码。
-  # 老版本 librime 此项默认 false，必须显式开启。
-  enable_completion: true
+  # script 引擎（拼音同款）：音节前缀由 speller/algebra 的 derive 简拼
+  # 派生（见上方说明），词组与句子（非词库串，如「早上吃什么」）都能组出。
+  enable_sentence: true
+  # 关闭用户词典：候选保持确定性、不学习（如需自动调频可改回 true）
+  enable_user_dict: false
   preedit_format:
 #   - xlit/hspnz/㇐㇑㇒㇏㇠/   # 中日韓筆畫（橫豎撇捺折）
     - xlit/hspnz/⼀⼁⼃⼂⼄/   # 康熙部首（橫豎撇點折）
@@ -92,8 +132,10 @@ punctuator:
 
 key_binder:
   bindings:
-    # 空格键插入分词分隔符（覆盖 default 中 has_menu 选第一候选的行为）
-    - { when: has_menu, accept: space, send: space }
+    # 空格键插入分词分隔符（覆盖 default 中 has_menu 选第一候选的行为）。
+    # 分隔符必须是撇号 '：词组简码用 ' 连接（见 stroke.dict.yaml 头部说明），
+    # 发送空格会导致带分隔符的输入查不到词组。
+    - { when: has_menu, accept: space, send: apostrophe }
     # 兼容其他筆畫名稱（捺屬點部、提屬橫部）
     - { when: always, accept: "d", send: "n" }
     - { when: always, accept: "t", send: "h" }

@@ -1,0 +1,5 @@
+stroke.userdb/
+*.userdb/
+__pycache__/
+build/
+_scratch/
