@@ -1,0 +1,88 @@
+name: Release
+
+# 推标签即发布：v4.0 / 4.0.0 都能触发（本仓库既有标签是 0.1.0，无 v 前缀）。
+# 也可在 Actions 页面手动触发，填一个标签名。
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布标签（如 4.0.0）；留空则用当前 ref 名"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出（含标签）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 解析版本号
+        id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          [ -n "$tag" ] || { echo "::error::无法确定版本号（请填 tag 输入）"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "版本号: $tag"
+
+      # 词库是生成物：确认它与 sources/ 同步，避免发布一个和源码对不上的词库。
+      # 重建是确定的（不同 PYTHONHASHSEED 下逐字节一致），所以可以逐字节比较。
+      - name: 校验词库与 sources 同步
+        run: |
+          set -euo pipefail
+          cp stroke.dict.yaml /tmp/stroke.dict.yaml.committed
+          python3 tools/build_stroke_dict.py
+          if ! cmp -s /tmp/stroke.dict.yaml.committed stroke.dict.yaml; then
+            echo "::error::stroke.dict.yaml 与 sources/ 不一致：请本地重跑 python3 tools/build_stroke_dict.py 并提交"
+            diff -u /tmp/stroke.dict.yaml.committed stroke.dict.yaml | head -60 || true
+            exit 1
+          fi
+          echo "词库与 sources 一致 ✓"
+
+      - name: 打包（仅 stroke.dict.yaml + stroke.schema.yaml）
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: tools/package_release.sh "$TAG"
+
+      - name: 创建 / 更新 Release 并上传产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          assets=(dist/*.zip dist/*.zip.sha256)
+
+          {
+            echo "### rime-stroke ${TAG}"
+            echo
+            echo '```'
+            unzip -l dist/*.zip
+            echo '```'
+            cat dist/*.sha256
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，覆盖上传产物"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "创建 Release $TAG（标签已存在）"
+            gh release create "$TAG" "${assets[@]}" \
+              --title "rime-stroke $TAG" --generate-notes
+          else
+            echo "创建 Release $TAG 并在当前提交打标签（手动触发）"
+            gh release create "$TAG" "${assets[@]}" \
+              --title "rime-stroke $TAG" --generate-notes --target "$GITHUB_SHA"
+          fi

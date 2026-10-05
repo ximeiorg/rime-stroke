@@ -3,3 +3,4 @@ stroke.userdb/
 __pycache__/
 build/
 _scratch/
+dist/

@@ -142,6 +142,33 @@ RIME_FINAL_ONLY=1 python3 <repo>/tools/test_candidates.py . \
 数百毫秒内；若出现秒级耗时，多半是简拼扇出失控（字集变大或 rules 里
 加了 1 笔派生）。
 
+## 发布
+
+推版本标签即触发 GitHub Actions 发布（`.github/workflows/release.yml`，
+推 `v*` 或 `[0-9]*` 形式的标签；也可在 Actions 页面手动触发）：
+
+```sh
+# 先把 stroke.schema.yaml 的 schema/version 改成新版本并提交
+git tag 4.0.0 && git push origin 4.0.0
+```
+
+流水线做三件事：
+
+1. **校验词库与 sources 同步**：重跑构建脚本并逐字节比对 `stroke.dict.yaml`，
+   不一致直接失败（重建是确定的，不同 `PYTHONHASHSEED` 下结果一致）；
+2. **打包**：`rime-stroke-<版本>.zip` 里**只有 `stroke.dict.yaml` 与
+   `stroke.schema.yaml` 两个文件**，另有独立的 `.zip.sha256` 校验和资产
+   （不在包内）；
+3. **创建 / 更新 Release** 并上传产物。
+
+本地想打同样的包：
+
+```sh
+tools/package_release.sh 4.0.0     # 省略版本号则读 schema 里的 version
+```
+
+产物在 `dist/`；同一个词库 + 方案打出的 zip 逐字节可复现。
+
 ## 目录结构
 
 ```
@@ -150,4 +177,6 @@ stroke.dict.yaml      词库（生成物，勿手改）
 sources/              原料数据及出处说明
 tools/build_stroke_dict.py    词库构建
 tools/test_candidates.py      按键级行为测试
+tools/package_release.sh      发布打包（仅两个文件）
+.github/workflows/release.yml 标签触发的发布流水线
 ```
